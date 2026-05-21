@@ -1,0 +1,6 @@
+whatsapp_session/
+temp_audio_files/
+transcricoes.json
+__pycache__/
+*.pyc
+.DS_Store

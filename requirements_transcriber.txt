@@ -1,0 +1,13 @@
+# Whisper (transcricao de audio)
+openai-whisper>=20231117
+
+# Playwright (automacao do Chrome)
+playwright>=1.40.0
+
+# Para captura de audio, whisper precisa de:
+numpy
+torch>=2.0.0
+
+# Opcionais para melhor performance:
+# ffmpeg (deve estar instalado no sistema via PATH)
+# ou instalar: pip install ffmpeg-python
