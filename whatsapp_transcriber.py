@@ -75,23 +75,18 @@ INJECT_SCRIPT = """
         }
     }
 
-    // Clique: escaneia linha por blob URL e enfileira transcricao
+    window.__waRowForUrl = {};
+
+    // Clique: salva linha, escaneia por blob URL e enfileira transcricao
     document.addEventListener('pointerdown', function(e) {
         var row = e.target.closest('[role="row"]');
         if (row) {
+            window.__waLastClickedRow = row;
             window.__waLastClick = Date.now();
             window.__waClickCount++;
             var url = _findBlobUrl(row);
             window.__waClickedBlobUrl = url;
-            if (url) { _queueTranscribe(url); return; }
-            // Fallback: ultimo audio nao transcrito no cache
-            var keys = Object.keys(window.__waAudioCache);
-            for (var i = keys.length - 1; i >= 0; i--) {
-                if (!window.__waAudioCache[keys[i]]._q) {
-                    _queueTranscribe(keys[i]);
-                    break;
-                }
-            }
+            if (url) { window.__waRowForUrl[url] = row; _queueTranscribe(url); }
         }
     }, true);
 
@@ -146,49 +141,45 @@ POLL_SCRIPT = """
 })()
 """
 
-CREATE_POPUP_SCRIPT = """
-(() => {
+SHOW_TEXT_SCRIPT = """
+(arg) => {
     try {
-        if (document.getElementById('wa-popup')) return 'exists';
+        var text = arg.text;
+        var url = arg.url;
+
+        var old = document.getElementById('wa-popup');
+        if (old) old.remove();
+
+        var row = (url && window.__waRowForUrl && window.__waRowForUrl[url]) || window.__waLastClickedRow;
+        if (!row || !row.isConnected) return 'no_row';
+
         var p = document.createElement('div');
         p.id = 'wa-popup';
-        p.innerHTML = '<div id="wa-header" style="font-size:11px;color:#a0a0a0;margin-bottom:4px;display:flex;justify-content:space-between;cursor:move;user-select:none;"><span>Transcricao</span><span id="wa-close" style="cursor:pointer;font-weight:bold;user-select:none;">x</span></div><div id="wa-body" style="word-wrap:break-word;"></div>';
-        var css = 'position:fixed;bottom:20px;right:20px;max-width:420px;width:auto;min-width:200px;background:#111b21;color:#e9edef;padding:12px 16px;border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,0.6);z-index:2147483647;font-family:Segoe UI,sans-serif;font-size:13px;line-height:1.5;display:block;border:1px solid #333;pointer-events:auto;';
-        p.style.cssText = css;
-        document.body.appendChild(p);
-        document.getElementById('wa-close').onclick = function(){p.style.display='none';};
 
-        // Arrastar
-        (function() {
-            var drag = false, sx, sy, lx, ly;
-            document.getElementById('wa-header').addEventListener('mousedown', function(e) {
-                drag = true; sx = e.clientX; sy = e.clientY;
-                var r = p.getBoundingClientRect(); lx = r.left; ly = r.top;
-                p.style.left = lx + 'px'; p.style.top = ly + 'px';
-                p.style.right = 'auto'; p.style.bottom = 'auto';
-                e.preventDefault();
-            });
-            document.addEventListener('mousemove', function(e) {
-                if (!drag) return;
-                p.style.left = (lx + e.clientX - sx) + 'px';
-                p.style.top = (ly + e.clientY - sy) + 'px';
-            });
-            document.addEventListener('mouseup', function() { drag = false; });
-        })();
+        // Fechar
+        var closeBtn = document.createElement('span');
+        closeBtn.id = 'wa-close';
+        closeBtn.textContent = 'x';
+        closeBtn.style.cssText = 'position:absolute;top:-9px;right:-9px;cursor:pointer;background:#333;color:#fff;width:20px;height:20px;border-radius:50%;text-align:center;line-height:18px;font-size:13px;font-weight:bold;z-index:10;border:1px solid #555;box-shadow:0 1px 4px rgba(0,0,0,0.5);';
+        closeBtn.onclick = function(){p.remove();window.__waPopupOpen=false;};
+        p.appendChild(closeBtn);
 
-        return 'created';
-    } catch(e) { return 'err:'+String(e); }
-})();
-"""
-
-SHOW_TEXT_SCRIPT = """
-(text) => {
-    try {
-        var body = document.getElementById('wa-body');
-        var popup = document.getElementById('wa-popup');
-        if (!body || !popup) return 'not_found';
+        // Corpo
+        var body = document.createElement('div');
         body.textContent = text;
-        popup.style.display = 'block';
+        body.style.cssText = 'white-space:pre-wrap;word-wrap:break-word;';
+        p.appendChild(body);
+
+        // Rabeta
+        var style = document.createElement('style');
+        style.textContent = '#wa-popup::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:7px solid transparent;border-top-color:#1f2c33;}';
+        p.appendChild(style);
+
+        p.style.cssText = 'position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);max-width:380px;min-width:140px;white-space:pre-wrap;word-wrap:break-word;background:#1f2c33;color:#e9edef;padding:10px 14px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);z-index:999;font-family:Segoe UI,sans-serif;font-size:12px;line-height:1.5;border:1px solid #333;pointer-events:auto;';
+
+        if (window.getComputedStyle(row).position === 'static') row.style.position = 'relative';
+        row.appendChild(p);
+        window.__waPopupOpen = true;
         return 'ok';
     } catch(e) { return 'err:'+String(e); }
 }
@@ -197,8 +188,9 @@ SHOW_TEXT_SCRIPT = """
 HIDE_POPUP_SCRIPT = """
 (() => {
     try {
-        var popup = document.getElementById('wa-popup');
-        if (popup) popup.style.display = 'none';
+        var p = document.getElementById('wa-popup');
+        if (p) p.remove();
+        window.__waPopupOpen = false;
         return 'ok';
     } catch(e) { return 'err:'+String(e); }
 })();
@@ -353,14 +345,8 @@ class WaTranscriber:
         self._seen.add(key)
         self._seen_order.append(key)
 
-    def _ensure_popup(self):
-        return self._exec(CREATE_POPUP_SCRIPT)
-
-    def _show_popup(self, text):
-        result = self._exec(SHOW_TEXT_SCRIPT, text)
-        if result != 'ok':
-            self._ensure_popup()
-            result = self._exec(SHOW_TEXT_SCRIPT, text)
+    def _show_popup(self, text, blob_url=None):
+        result = self._exec(SHOW_TEXT_SCRIPT, {"text": text, "url": blob_url})
         self._popup_showing = (result == 'ok')
         return self._popup_showing
 
@@ -403,6 +389,7 @@ class WaTranscriber:
                     self._seen_order.clear()
                     self._url_results.clear()
                     self._last_shown = ""
+                    self._exec("(() => { window.__waRowForUrl = {}; window.__waLastClickedRow = null; return 1; })()")
                     self._hide_popup()
                     self._log(f"[APP] Chat atual: {chat[:40]}")
 
@@ -443,7 +430,7 @@ class WaTranscriber:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")
                     }
                     self._transcriptions.append(entry)
-                    self._show_popup(full_text)
+                    self._show_popup(full_text, blob_url)
                     self._last_shown = full_text
                     self._log(f"[POPUP] #{seq}: {text[:60]}...")
 
@@ -451,7 +438,7 @@ class WaTranscriber:
                 target_url = click_url or played_url
                 if target_url and target_url in self._url_results:
                     txt = self._url_results[target_url]
-                    self._show_popup(txt)
+                    self._show_popup(txt, target_url)
                     self._last_shown = txt
                     self._log(f"[POPUP] url-match: {txt[:60]}...")
 
