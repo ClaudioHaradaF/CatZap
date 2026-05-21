@@ -7,10 +7,12 @@ Captura audio via URL.createObjectURL e vincula ao clique.
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
 import traceback
+import unicodedata
 from pathlib import Path
 
 try:
@@ -23,6 +25,13 @@ try:
     import whisper
 except ImportError:
     whisper = None
+
+try:
+    from spellchecker import SpellChecker
+    _SPELL_PT = SpellChecker(language='pt')
+    HAS_SPELL = True
+except Exception:
+    HAS_SPELL = False
 
 from playwright.sync_api import sync_playwright
 
@@ -46,25 +55,35 @@ INJECT_SCRIPT = """
     window.__waClickedBlobUrl = null;
     window.__waPlayedBlobUrl = null;
     window.__waPlayedTime = 0;
+    window.__waRowForUrl = {};
+
+    // Stubs para expose_function (substituidos pelo Python apos o login)
+    window.__waPyPushClick = window.__waPyPushClick || function(){};
+    window.__waPyPushPlayed = window.__waPyPushPlayed || function(){};
 
     function _findBlobUrl(row) {
-        var els = row.querySelectorAll('[src*="blob:"]');
-        for (var i = 0; i < els.length; i++)
+        var els = row.querySelectorAll('[src*="blob:"],[style*="blob:"],[data-src*="blob:"]');
+        for (var i = 0; i < els.length; i++) {
             if (els[i].src && els[i].src.indexOf('blob:') === 0) return els[i].src;
-        var all = row.querySelectorAll('*');
-        for (var i = 0; i < all.length; i++) {
-            var bg = (all[i].style && (all[i].style.backgroundImage || all[i].style.background)) || '';
+            var bg = els[i].getAttribute('style') || '';
             var m = bg.match(/blob:[^\\s"')]+/);
             if (m) return m[0];
+        }
+        // Scan de background-image computado (WhatsApp usa CSS classes)
+        var all = row.querySelectorAll('div,span');
+        for (var i = 0; i < all.length && i < 20; i++) {
+            var bg = window.getComputedStyle(all[i]).backgroundImage;
+            if (bg && bg.indexOf('blob:') !== -1) {
+                var m = bg.match(/blob:[^\\s"')]+/);
+                if (m) return m[0];
+            }
         }
         return null;
     }
 
     function _findTarget(row) {
-        // Tenta o proprio audio player (elemento mais estreito)
-        var el = row.querySelector('[data-testid="audio-player"], [data-testid="player-container"], [class*="audio"]');
+        var el = row.querySelector('[data-testid*="audio" i],[class*="audio" i]');
         if (el && el.closest('[role="row"]') === row) return el;
-        // Bolha da mensagem (message-out/message-in)
         var kids = row.children;
         for (var i = 0; i < kids.length; i++)
             if (kids[i].offsetWidth > 0 && kids[i].offsetHeight > 0) return kids[i];
@@ -76,36 +95,34 @@ INJECT_SCRIPT = """
         if (c && !c._q) {
             c._q = true;
             c.blob.arrayBuffer().then(function(buf) {
-                window.__waClickTranscribe.push({
+                var item = {
                     d: Array.from(new Uint8Array(buf)),
                     seq: c.seq, url: url,
                     clickTime: window.__waLastClick || Date.now(),
                     t: Date.now()
-                });
+                };
+                window.__waClickTranscribe.push(item);
+                window.__waPyPushClick(JSON.stringify(item));
             }).catch(function(){});
         }
     }
 
-    window.__waRowForUrl = {};
-
-    // Clique: salva alvo (bolha), escaneia por blob URL e enfileira transcricao
     document.addEventListener('pointerdown', function(e) {
         var row = e.target.closest('[role="row"]');
-        if (row) {
-            window.__waLastClickedRow = row;
-            window.__waLastClick = Date.now();
-            window.__waClickCount++;
-            var url = _findBlobUrl(row);
-            window.__waClickedBlobUrl = url;
-            if (url) {
-                window.__waRowForUrl[url] = row;
-                window.__waRowForUrl[url + '_target'] = _findTarget(row);
-                _queueTranscribe(url);
-            }
+        if (!row) return;
+
+        window.__waLastClickedRow = row;
+        window.__waLastClick = Date.now();
+        window.__waClickCount++;
+        var url = _findBlobUrl(row);
+        window.__waClickedBlobUrl = url;
+        if (url) {
+            window.__waRowForUrl[url] = row;
+            window.__waRowForUrl[url + '_target'] = _findTarget(row);
+            _queueTranscribe(url);
         }
     }, true);
 
-    // Intercepta HTMLMediaElement.play
     (function() {
         var p = HTMLMediaElement.prototype.play;
         HTMLMediaElement.prototype.play = function() {
@@ -113,13 +130,13 @@ INJECT_SCRIPT = """
             if (s && s.indexOf('blob:') === 0) {
                 window.__waPlayedBlobUrl = s;
                 window.__waPlayedTime = Date.now();
+                window.__waPyPushPlayed(s);
                 _queueTranscribe(s);
             }
             return p.apply(this, arguments);
         };
     })();
 
-    // URL.createObjectURL: apenas cacheia, nunca enfileira
     var _orig = URL.createObjectURL.bind(URL);
     URL.createObjectURL = function(b) {
         var url = _orig(b);
@@ -193,7 +210,16 @@ SHOW_TEXT_SCRIPT = """
         style.textContent = '#wa-popup::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:7px solid transparent;border-top-color:#1f2c33;}';
         p.appendChild(style);
 
-        p.style.cssText = 'position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);max-width:380px;min-width:140px;white-space:pre-wrap;word-wrap:break-word;background:#1f2c33;color:#e9edef;padding:10px 14px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);z-index:999;font-family:Segoe UI,sans-serif;font-size:12px;line-height:1.5;border:1px solid #333;pointer-events:auto;';
+        p.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);max-width:380px;min-width:140px;white-space:pre-wrap;word-wrap:break-word;background:#1f2c33;color:#e9edef;padding:10px 14px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);z-index:999;font-family:Segoe UI,sans-serif;font-size:12px;line-height:1.5;border:1px solid #333;pointer-events:auto;';
+
+        // Posicao inteligente: acima se couber, senao abaixo
+        var r = target.getBoundingClientRect();
+        if (r.top > 160) {
+            p.style.bottom = 'calc(100% + 10px)';
+        } else {
+            p.style.top = 'calc(100% + 10px)';
+            style.textContent = '#wa-popup::after{content:"";position:absolute;bottom:100%;left:50%;transform:translateX(-50%);border:7px solid transparent;border-bottom-color:#1f2c33;}';
+        }
 
         target.appendChild(p);
         window.__waPopupOpen = true;
@@ -232,6 +258,9 @@ class WaTranscriber:
         self._transcriptions = []
         self._popup_showing = False
         self._url_results = {}
+        self._push_audio_queue = queue.Queue()
+        self._push_click_queue = queue.Queue()
+        self._push_played_queue = queue.Queue()
 
         TEMP_DIR.mkdir(exist_ok=True)
         if not HAS_FASTER and whisper is None:
@@ -280,6 +309,43 @@ class WaTranscriber:
         except Exception:
             return None
 
+    def _setup_push(self):
+        try:
+            self.page.expose_function("__waPyPushClick", self._on_push_click)
+            self.page.expose_function("__waPyPushPlayed", self._on_push_played)
+            self._log("[APP] Push JS->Python ativo")
+        except Exception as e:
+            self._log(f"[APP] Push nao disponivel: {e}")
+
+    def _on_push_click(self, data_json):
+        self._push_click_queue.put(data_json)
+
+    def _on_push_played(self, url):
+        self._push_played_queue.put(url)
+
+    def _setup_routes(self):
+        try:
+            self.page.route("**/*", lambda route: self._handle_route(route))
+        except Exception as e:
+            self._log(f"[APP] Route nao disponivel: {e}")
+
+    def _handle_route(self, route):
+        url = route.request.url
+        if 'audio' in route.request.resource_type or any(x in url for x in ['/mms/', '/media/']):
+            try:
+                response = route.fetch()
+                ct = response.headers.get('content-type', '')
+                if 'audio' in ct:
+                    body = response.body()
+                    if len(body) > 1000:
+                        self._audio_queue.put((body, self._current_chat, 0, 0, ""))
+                        self._log(f"[NET] Audio capturado via route: {len(body)}b")
+                route.fulfill(response=response)
+            except Exception:
+                route.continue_()
+        else:
+            route.continue_()
+
     def start(self):
         self._log("[APP] Chrome ...")
         self.playwright = sync_playwright().start()
@@ -310,6 +376,11 @@ class WaTranscriber:
             if 'whatsapp.com' in p.url:
                 self.page = p
                 break
+
+        # Setup push (JS -> Python) e captura de rede
+        self._setup_push()
+        self._setup_routes()
+
         self._log("[APP] Conectado!")
 
     def transcribe(self, data):
@@ -338,6 +409,30 @@ class WaTranscriber:
             self._log(f"[ERRO] transcricao: {e}")
             return (None, None, 0)
 
+    def _post_process(self, text):
+        if not text:
+            return text
+        t = unicodedata.normalize("NFKC", text)
+        t = re.sub(r'(.)\1{3,}', r'\1\1', t)
+        t = re.sub(r'\s+([.,!?;:])', r'\1', t)
+        t = re.sub(r'([.,!?;:])(?!\s|$)', r'\1 ', t)
+        t = re.sub(r' {2,}', ' ', t)
+        t = t.strip()
+
+        if HAS_SPELL:
+            def _fix(m):
+                w = m.group(0)
+                if len(w) > 2 and w.lower() in _SPELL_PT.unknown([w.lower()]):
+                    s = _SPELL_PT.correction(w.lower())
+                    if s and s != w.lower():
+                        return s[0].upper() + s[1:] if w[0].isupper() else s
+                return w
+            t = re.sub(r'\b[a-zA-Z\u00C0-\u024F]{3,}\b', _fix, t)
+
+        if t and t[0].isalpha():
+            t = t[0].upper() + t[1:]
+        return t
+
     def _worker(self):
         while self._running:
             try:
@@ -348,6 +443,8 @@ class WaTranscriber:
                 break
             audio, chat, seq, js_seq, blob_url = item
             text, dur, secs = self.transcribe(audio)
+            if text:
+                text = self._post_process(text)
             dur_str = self.fmt_dur(dur)
             if text:
                 self._result_queue.put((seq, chat, text, dur_str, js_seq, blob_url))
@@ -458,6 +555,26 @@ class WaTranscriber:
                     self._show_popup(txt, target_url)
                     self._last_shown = txt
                     self._log(f"[POPUP] url-match: {txt[:60]}...")
+
+                # Push queues (expose_function) – replay instantaneo
+                while not self._push_click_queue.empty():
+                    try:
+                        d = json.loads(self._push_click_queue.get_nowait())
+                        u = d.get("url", "")
+                        if u and u in self._url_results:
+                            txt = self._url_results[u]
+                            self._show_popup(txt, u)
+                            self._last_shown = txt
+                            self._log(f"[PUSH] replay: {txt[:60]}...")
+                    except Exception:
+                        pass
+                while not self._push_played_queue.empty():
+                    u = self._push_played_queue.get_nowait()
+                    if u and u in self._url_results:
+                        txt = self._url_results[u]
+                        self._show_popup(txt, u)
+                        self._last_shown = txt
+                        self._log(f"[PUSH] played: {txt[:60]}...")
 
                 if now - self._export_t > 30:
                     self._export_t = now
