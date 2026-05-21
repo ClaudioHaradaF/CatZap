@@ -4,3 +4,6 @@ transcricoes.json
 __pycache__/
 *.pyc
 .DS_Store
+build/
+dist/
+*.spec
