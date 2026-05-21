@@ -60,6 +60,17 @@ INJECT_SCRIPT = """
         return null;
     }
 
+    function _findTarget(row) {
+        // Tenta o proprio audio player (elemento mais estreito)
+        var el = row.querySelector('[data-testid="audio-player"], [data-testid="player-container"], [class*="audio"]');
+        if (el && el.closest('[role="row"]') === row) return el;
+        // Bolha da mensagem (message-out/message-in)
+        var kids = row.children;
+        for (var i = 0; i < kids.length; i++)
+            if (kids[i].offsetWidth > 0 && kids[i].offsetHeight > 0) return kids[i];
+        return row;
+    }
+
     function _queueTranscribe(url) {
         var c = window.__waAudioCache[url];
         if (c && !c._q) {
@@ -77,7 +88,7 @@ INJECT_SCRIPT = """
 
     window.__waRowForUrl = {};
 
-    // Clique: salva linha, escaneia por blob URL e enfileira transcricao
+    // Clique: salva alvo (bolha), escaneia por blob URL e enfileira transcricao
     document.addEventListener('pointerdown', function(e) {
         var row = e.target.closest('[role="row"]');
         if (row) {
@@ -86,7 +97,11 @@ INJECT_SCRIPT = """
             window.__waClickCount++;
             var url = _findBlobUrl(row);
             window.__waClickedBlobUrl = url;
-            if (url) { window.__waRowForUrl[url] = row; _queueTranscribe(url); }
+            if (url) {
+                window.__waRowForUrl[url] = row;
+                window.__waRowForUrl[url + '_target'] = _findTarget(row);
+                _queueTranscribe(url);
+            }
         }
     }, true);
 
@@ -150,8 +165,11 @@ SHOW_TEXT_SCRIPT = """
         var old = document.getElementById('wa-popup');
         if (old) old.remove();
 
-        var row = (url && window.__waRowForUrl && window.__waRowForUrl[url]) || window.__waLastClickedRow;
-        if (!row || !row.isConnected) return 'no_row';
+        var target = (url && window.__waRowForUrl && (window.__waRowForUrl[url + '_target'] || window.__waRowForUrl[url])) || window.__waLastClickedRow;
+        if (!target || !target.isConnected) return 'no_row';
+
+        // Garante que o alvo possa posicionar absolute
+        if (window.getComputedStyle(target).position === 'static') target.style.position = 'relative';
 
         var p = document.createElement('div');
         p.id = 'wa-popup';
@@ -177,8 +195,7 @@ SHOW_TEXT_SCRIPT = """
 
         p.style.cssText = 'position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);max-width:380px;min-width:140px;white-space:pre-wrap;word-wrap:break-word;background:#1f2c33;color:#e9edef;padding:10px 14px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.5);z-index:999;font-family:Segoe UI,sans-serif;font-size:12px;line-height:1.5;border:1px solid #333;pointer-events:auto;';
 
-        if (window.getComputedStyle(row).position === 'static') row.style.position = 'relative';
-        row.appendChild(p);
+        target.appendChild(p);
         window.__waPopupOpen = true;
         return 'ok';
     } catch(e) { return 'err:'+String(e); }
@@ -389,7 +406,7 @@ class WaTranscriber:
                     self._seen_order.clear()
                     self._url_results.clear()
                     self._last_shown = ""
-                    self._exec("(() => { window.__waRowForUrl = {}; window.__waLastClickedRow = null; return 1; })()")
+                    self._exec("(() => { window.__waRowForUrl = {}; window.__waLastClickedRow = null; window.__waPopupOpen = false; return 1; })()")
                     self._hide_popup()
                     self._log(f"[APP] Chat atual: {chat[:40]}")
 
