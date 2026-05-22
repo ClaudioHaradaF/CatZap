@@ -1,0 +1,21 @@
+# CatZap v1.0 — Servidor de transcricao
+# Instalar com: pip install -r requirements_transcriber.txt
+
+# Whisper (transcricao de audio) — versao otimizada (CTranslate2)
+faster-whisper>=1.0.0
+
+# Corretor ortografico para portugues
+pyspellchecker>=0.8.0
+
+# Dependencias do faster-whisper:
+numpy
+torch>=2.0.0
+
+# Tray icon (bandeja do sistema)
+pystray>=0.19.0
+pillow>=10.0.0
+
+# Opcionais:
+# ffmpeg (deve estar instalado no sistema via PATH)
+#   Baixar de: https://ffmpeg.org/download.html
+#   Ou instalar via: winget install ffmpeg

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CatZap",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Transcreve audios do WhatsApp ao clicar no play.",
   "icons": {
     "48": "icon48.png",
@@ -14,6 +14,9 @@
       "run_at": "document_start"
     }
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "web_accessible_resources": [
     {
       "resources": ["inject.js"],
@@ -22,5 +25,8 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:51777/*"
+  ],
+  "permissions": [
+    "storage"
   ]
 }

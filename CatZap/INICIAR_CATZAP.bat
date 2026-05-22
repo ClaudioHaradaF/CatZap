@@ -9,15 +9,15 @@ echo ============================================
 echo   CatZap v1.0 - Servidor de Transcricao
 echo ============================================
 echo.
-echo  Instale a extensao no Chrome/Edge:
-echo  1. Abra chrome://extensions (ou edge://extensions)
-echo  2. Ative "Modo do desenvolvedor"
-echo  3. Clique "Carregar sem compactacao"
-echo  4. Selecione a pasta "cat_zap_extension"
-echo  5. Abra web.whatsapp.com e clique em um audio
+echo  Na primeira execucao, o CatZap vai:
+echo  1. Extrair a extensao para %APPDATA%\CatZap\extension
+echo  2. Abrir instrucoes para instalar no Chrome
+echo  3. Baixar o modelo Whisper
+echo  4. Criar atalho na Area de Trabalho
+echo.
+echo  Nas proximas, inicia o servidor direto.
 echo.
 echo ============================================
-echo.
 echo.
 
 if exist "CatZap.exe" (

@@ -10,3 +10,6 @@ dist/
 CatZap.exe
 CatZap_v1.0.zip
 vc_redist.x64.exe
+*.db
+.opencode/
+debug_screenshots/
