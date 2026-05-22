@@ -7,3 +7,6 @@ __pycache__/
 build/
 dist/
 *.spec
+CatZap.exe
+CatZap_v1.0.zip
+vc_redist.x64.exe
