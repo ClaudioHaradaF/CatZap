@@ -108,7 +108,10 @@ _APP_DATA = Path(os.environ['APPDATA']) / 'CatZap'
 _EXT_SRC = _BUNDLE_DIR / 'cat_zap_extension'
 _EXT_DST = _APP_DATA / 'extension'
 _MODELS_DIR = _APP_DATA / 'models'
-_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
+_BUNDLE_MODELS = _BUNDLE_DIR / '_internal' / 'models' / 'whisper'
+_FALLBACK_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
+if _FALLBACK_BUNDLE_MODELS.exists():
+    _BUNDLE_MODELS = _FALLBACK_BUNDLE_MODELS
 _SETUP_MARKER = _APP_DATA / '.installed'
 
 os.environ.setdefault('WHISPER_CACHE_DIR', str(_MODELS_DIR / 'whisper'))
