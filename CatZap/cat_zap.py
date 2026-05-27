@@ -112,6 +112,10 @@ _BUNDLE_MODELS = _BUNDLE_DIR / '_internal' / 'models' / 'whisper'
 _FALLBACK_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
 if _FALLBACK_BUNDLE_MODELS.exists():
     _BUNDLE_MODELS = _FALLBACK_BUNDLE_MODELS
+elif _BUNDLE_MODELS.exists():
+    _BUNDLE_MODELS = _BUNDLE_MODELS
+else:
+    _BUNDLE_MODELS = None  # No bundled model available
 _SETUP_MARKER = _APP_DATA / '.installed'
 
 os.environ.setdefault('WHISPER_CACHE_DIR', str(_MODELS_DIR / 'whisper'))
@@ -220,7 +224,7 @@ def _get_model():
                         _MODELS_DIR.mkdir(parents=True, exist_ok=True)
                         # Check if model is bundled
                         download_dir = str(_MODELS_DIR / 'whisper')
-                        if getattr(sys, 'frozen', False) and _BUNDLE_MODELS.exists():
+                        if _BUNDLE_MODELS and _BUNDLE_MODELS.exists():
                             download_dir = str(_BUNDLE_MODELS)
                             _update_splash(f"Carregando modelo '{mod_name}' embutido...")
                         else:
@@ -402,6 +406,9 @@ class CatZapHandler(BaseHTTPRequestHandler):
 
 # --- tray icon ---
 def _start_tray():
+    def on_quit():
+        _cleanup_temp()
+        os._exit(0)
     try:
         import pystray
         from PIL import Image
@@ -417,16 +424,22 @@ def _start_tray():
                          ((4,11),B),((5,11),B),((9,11),B),((10,11),B),
                          ((6,12),B),((7,12),B),((8,12),B)]:
             if 0<=x<16 and 0<=y<16: px[x,y]=c
-        def on_quit():
-            _cleanup_temp()
-            os._exit(0)
         icon = pystray.Icon("CatZap", icon_img, f"CatZap v1.3 :{PORT}", menu=pystray.Menu(
             pystray.MenuItem("Abrir health check", lambda: webbrowser.open(f"http://127.0.0.1:{PORT}/health")),
             pystray.MenuItem("Abrir pasta da extensao", lambda: os.startfile(str(_EXT_DST))),
             pystray.MenuItem("Sair", on_quit),
         ))
         icon.run()
-    except ImportError:
+    except ImportError as e:
+        print(f"[CatZap] pystray ImportError: {e}")
+        try:
+            while True: time.sleep(3600)
+        except KeyboardInterrupt:
+            _cleanup_temp()
+            os._exit(0)
+    except Exception as e:
+        traceback.print_exc()
+        print(f"[CatZap] pystray error: {e}")
         try:
             while True: time.sleep(3600)
         except KeyboardInterrupt:
