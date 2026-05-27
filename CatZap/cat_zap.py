@@ -115,17 +115,22 @@ _APP_DATA = Path(os.environ['APPDATA']) / 'CatZap'
 _EXT_SRC = _BUNDLE_DIR / 'cat_zap_extension'
 _EXT_DST = _APP_DATA / 'extension'
 _MODELS_DIR = _APP_DATA / 'models'
-_BUNDLE_MODELS = _BUNDLE_DIR / '_internal' / 'models' / 'whisper'
-_FALLBACK_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
-if _FALLBACK_BUNDLE_MODELS.exists():
-    _BUNDLE_MODELS = _FALLBACK_BUNDLE_MODELS
-elif _BUNDLE_MODELS.exists():
-    _BUNDLE_MODELS = _BUNDLE_MODELS
-else:
-    _BUNDLE_MODELS = None  # No bundled model available
-_SETUP_MARKER = _APP_DATA / '.installed'
+_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
+_FALLBACK_BUNDLE_MODELS = _BUNDLE_DIR / '_internal' / 'models' / 'whisper'
 
-os.environ.setdefault('WHISPER_CACHE_DIR', str(_MODELS_DIR / 'whisper'))
+# Check for bundled model or use environment variable
+if _BUNDLE_MODELS.exists():
+    _BUNDLE_MODELS = _BUNDLE_MODELS
+elif _FALLBACK_BUNDLE_MODELS.exists():
+    _BUNDLE_MODELS = _FALLBACK_BUNDLE_MODELS
+else:
+    _BUNDLE_MODELS = None
+
+# Use WHISPER_CACHE_DIR if set (for testing)
+if 'WHISPER_CACHE_DIR' in os.environ:
+    _MODELS_DIR = Path(os.environ['WHISPER_CACHE_DIR'])
+    _BUNDLE_MODELS = _MODELS_DIR
+_SETUP_MARKER = _APP_DATA / '.installed'
 
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 TRANSCRIPTION_LANG = os.environ.get("WHISPER_LANG", "pt")
@@ -226,30 +231,40 @@ def _get_model():
                 models_to_try = [WHISPER_MODEL]
                 if WHISPER_MODEL != "tiny":
                     models_to_try.append("tiny")
+                # Try float16 first (better quality), fallback to int8
+                compute_types = ["float16", "int8"]
                 for mod_name in models_to_try:
-                    try:
-                        _MODELS_DIR.mkdir(parents=True, exist_ok=True)
-                        # Check if model is bundled
-                        download_dir = str(_MODELS_DIR / 'whisper')
-                        if _BUNDLE_MODELS and _BUNDLE_MODELS.exists():
-                            download_dir = str(_BUNDLE_MODELS)
-                            _update_splash(f"Carregando modelo '{mod_name}' embutido...")
-                        else:
-                            _update_splash(f"Baixando modelo '{mod_name}' (pode levar alguns minutos)...")
-                        model = WhisperModel(mod_name, device="cpu", compute_type="int8",
-                                         download_root=download_dir)
-                        _update_splash(f"Modelo '{mod_name}' carregado!")
-                        print(f"[CatZap Server] Modelo '{mod_name}' carregado com sucesso")
+                    for compute_type in compute_types:
+                        try:
+                            _MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                            # If model is bundled, use that path
+                            if _BUNDLE_MODELS and _BUNDLE_MODELS.exists():
+                                download_dir = str(_BUNDLE_MODELS)
+                                print(f"[DEBUG] Using bundled model at: {download_dir}")
+                                _update_splash(f"Carregando modelo '{mod_name}' embutido...")
+                            elif 'WHISPER_CACHE_DIR' in os.environ:
+                                download_dir = str(Path(os.environ['WHISPER_CACHE_DIR']))
+                                print(f"[DEBUG] Using WHISPER_CACHE_DIR: {download_dir}")
+                                _update_splash(f"Carregando modelo '{mod_name}'...")
+                            elif _FALLBACK_BUNDLE_MODELS and _FALLBACK_BUNDLE_MODELS.exists():
+                                download_dir = str(_FALLBACK_BUNDLE_MODELS)
+                                print(f"[DEBUG] Using fallback model at: {download_dir}")
+                                _update_splash(f"Carregando modelo '{mod_name}' embutido...")
+                            else:
+                                download_dir = str(_MODELS_DIR)
+                                _update_splash(f"Baixando modelo '{mod_name}'...")
+                            model = WhisperModel(mod_name, device="cpu", compute_type=compute_type,
+                                             download_root=download_dir)
+                            _update_splash(f"Modelo '{mod_name}' carregado!")
+                            print(f"[CatZap Server] Modelo '{mod_name}' carregado com sucesso (qualidade: {compute_type})")
+                            break
+                        except Exception as e:
+                            print(f"[CatZap Server] ERRO ao carregar modelo '{mod_name}': {e}")
+                            traceback.print_exc()
+                            model = None
+                            break
+                    if model is None:
                         break
-                    except Exception as e:
-                        tb = traceback.format_exc()
-                        log_path = str(_APP_DATA / 'erro_modelo.log')
-                        _write_log(log_path,
-                            f"[{time.ctime()}] Falha ao carregar modelo '{mod_name}'\n"
-                            f"Erro: {e}\n\n{tb}")
-                        print(f"[CatZap Server] ERRO ao carregar modelo '{mod_name}': {e}")
-                        traceback.print_exc()
-                        model = None
                 if model is None:
                     model_ready.set()
                     return None
@@ -413,60 +428,72 @@ class CatZapHandler(BaseHTTPRequestHandler):
 
 # --- tray icon ---
 def _start_tray():
-    # Ensure APPDATA directory exists for logging
     _APP_DATA.mkdir(parents=True, exist_ok=True)
     def on_quit():
         _cleanup_temp()
         os._exit(0)
+    
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            import pystray
+            from PIL import Image
+            icon_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+            px = icon_img.load()
+            B,W,Y = (60,55,70,255),(252,250,255,255),(255,235,140,255)
+            for (x,y),c in [((3,2),B),((4,2),B),((11,2),B),((12,2),B),
+                             ((2,3),B),((12,3),B),((2,4),B),((12,4),B),
+                             ((4,5),Y),((5,5),Y),((9,5),Y),((10,5),Y),
+                             ((4,6),B),((5,6),B),((9,6),B),((10,6),B),
+                             ((5,9),B),((6,9),B),((8,9),B),((9,9),B),
+                             ((6,10),B),((7,10),B),((8,10),B),
+                             ((4,11),B),((5,11),B),((9,11),B),((10,11),B),
+                             ((6,12),B),((7,12),B),((8,12),B)]:
+                if 0<=x<16 and 0<=y<16: px[x,y]=c
+            icon = pystray.Icon("CatZap", icon_img, f"CatZap v1.3 :{PORT}", menu=pystray.Menu(
+                pystray.MenuItem("Abrir health check", lambda: webbrowser.open(f"http://127.0.0.1:{PORT}/health")),
+                pystray.MenuItem("Abrir pasta da extensao", lambda: os.startfile(str(_EXT_DST))),
+                pystray.MenuItem("Sair", on_quit),
+            ))
+            icon.run(setup=None)
+            return  # Success
+        except ImportError as e:
+            print(f"[CatZap] pystray ImportError: {e}")
+            try:
+                ctypes.windll.user32.MessageBoxW(0, f"Falta dependencia: {e}", "CatZap", 0x10)
+            except:
+                pass
+        except Exception as e:
+            log_path = str(_APP_DATA / 'erro_tray.log')
+            try:
+                with open(log_path, 'w', encoding='utf-8') as f:
+                    import traceback
+                    f.write(f"[CatZap] Tray error (attempt {attempt+1}): {e}\n\n")
+                    f.write(traceback.format_exc())
+            except:
+                pass
+            print(f"[CatZap] Tray error (attempt {attempt+1}): {e}")
+            traceback.print_exc()
+            
+            if attempt < max_retries - 1:
+                print(f"[CatZap] Retrying in {retry_delay} seconds... (attempt {attempt+2}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+    
+    # All retries failed - fallback to infinite loop
+    print("[CatZap] All tray retries failed. Server running without tray icon.")
     try:
-        import pystray
-        from PIL import Image
-        icon_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
-        px = icon_img.load()
-        B,W,Y = (60,55,70,255),(252,250,255,255),(255,235,140,255)
-        for (x,y),c in [((3,2),B),((4,2),B),((11,2),B),((12,2),B),
-                         ((2,3),B),((12,3),B),((2,4),B),((12,4),B),
-                         ((4,5),Y),((5,5),Y),((9,5),Y),((10,5),Y),
-                         ((4,6),B),((5,6),B),((9,6),B),((10,6),B),
-                         ((5,9),B),((6,9),B),((8,9),B),((9,9),B),
-                         ((6,10),B),((7,10),B),((8,10),B),
-                         ((4,11),B),((5,11),B),((9,11),B),((10,11),B),
-                         ((6,12),B),((7,12),B),((8,12),B)]:
-            if 0<=x<16 and 0<=y<16: px[x,y]=c
-        icon = pystray.Icon("CatZap", icon_img, f"CatZap v1.3 :{PORT}", menu=pystray.Menu(
-            pystray.MenuItem("Abrir health check", lambda: webbrowser.open(f"http://127.0.0.1:{PORT}/health")),
-            pystray.MenuItem("Abrir pasta da extensao", lambda: os.startfile(str(_EXT_DST))),
-            pystray.MenuItem("Sair", on_quit),
-        ))
-        icon.run(setup=None)
-    except ImportError as e:
-        print(f"[CatZap] pystray ImportError: {e}")
-        try:
-            while True: time.sleep(3600)
-        except KeyboardInterrupt:
-            _cleanup_temp()
-            os._exit(0)
-    except Exception as e:
-        log_path = str(_APP_DATA / 'erro_tray.log')
-        try:
-            _APP_DATA.mkdir(parents=True, exist_ok=True)
-            with open(log_path, 'w', encoding='utf-8') as f:
-                import traceback
-                f.write(f"[CatZap] Tray error: {e}\n\n")
-                f.write(traceback.format_exc())
-        except:
-            pass
-        print(f"[CatZap] pystray error: {e}")
-        traceback.print_exc()
-        try:
-            ctypes.windll.user32.MessageBoxW(0, f"Erro no tray icon: {e}", "CatZap", 0x10)
-        except:
-            pass
-        try:
-            while True: time.sleep(3600)
-        except KeyboardInterrupt:
-            _cleanup_temp()
-            os._exit(0)
+        ctypes.windll.user32.MessageBoxW(0, "Falha ao iniciar bandeja do sistema. Servidor rodando em segundo plano.", "CatZap - Erro", 0x30)
+    except:
+        pass
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        _cleanup_temp()
+        os._exit(0)
 
 # --- setup primeira execucao ---
 def _copy_extension():
