@@ -413,6 +413,8 @@ class CatZapHandler(BaseHTTPRequestHandler):
 
 # --- tray icon ---
 def _start_tray():
+    # Ensure APPDATA directory exists for logging
+    _APP_DATA.mkdir(parents=True, exist_ok=True)
     def on_quit():
         _cleanup_temp()
         os._exit(0)
