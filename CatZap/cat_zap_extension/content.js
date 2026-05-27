@@ -10,7 +10,25 @@ let _lastScan = 0;
 let _lastAudioPlayRow = null;
 let _lastAudioPlayDataId = '';
 let BALLOON_MODE = 'keep';
-const ROW_SELECTOR = '.message-in,.message-out,[data-id]';
+let BALLOON_THEME = 'light'; // or 'dark'
+
+const detectSystemTheme = () => {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+    }
+    return 'light';
+};
+
+const applySystemTheme = () => {
+    const savedTheme = localStorage.getItem('catzap_saved_theme');
+    if (savedTheme) {
+        BALLOON_THEME = savedTheme;
+    } else {
+        BALLOON_THEME = detectSystemTheme();
+    }
+    updateThemeBtn();
+};
+const ROW_SELECTOR = '[data-testid="msg-container"],[data-testid="conv-msg"],[data-id],div[data-id]';
 
 const cacheRow = (row) => {
     if (!row) return;
@@ -104,6 +122,15 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         toggleDebug();
     }
+    // Ctrl+Shift+H to open history panel
+    if (e.ctrlKey && e.shiftKey && (e.key === 'H' || e.key === 'h')) {
+        e.preventDefault();
+        showHistoryPanel();
+    }
+    // Escape to close all balloons
+    if (e.key === 'Escape') {
+        clearAllBalloons();
+    }
 });
 
 log('v1.1 debug panel iniciando...');
@@ -158,6 +185,60 @@ const toggleBalloonMode = () => {
     log('Modo balao:', BALLOON_MODE === 'keep' ? 'Manter' : 'Auto-limpar');
 };
 
+const toggleTheme = () => {
+    // Cycle: light → dark → system → light
+    if (BALLOON_THEME === 'light') {
+        BALLOON_THEME = 'dark';
+    } else if (BALLOON_THEME === 'dark') {
+        BALLOON_THEME = 'system';
+        localStorage.removeItem('catzap_saved_theme');
+        BALLOON_THEME = detectSystemTheme();
+    } else {
+        BALLOON_THEME = 'light';
+    }
+    if (BALLOON_THEME !== 'system') {
+        saveTheme(BALLOON_THEME);
+    }
+    updateThemeBtn();
+    log('Tema alterado para:', BALLOON_THEME);
+};
+
+const saveTheme = (theme) => {
+    localStorage.setItem('catzap_saved_theme', theme);
+    try { chrome.storage.local.set({ catzap_balloon_theme: theme }); } catch {}
+};
+
+const loadTheme = () => {
+    // First check if user has explicitly chosen a theme
+    try {
+        chrome.storage.local.get('catzap_balloon_theme', (r) => {
+            if (r.catzap_balloon_theme) {
+                BALLOON_THEME = r.catzap_balloon_theme;
+            } else {
+                // Otherwise use system preference
+                BALLOON_THEME = detectSystemTheme();
+            }
+            updateThemeBtn();
+        });
+    } catch {
+        BALLOON_THEME = detectSystemTheme();
+        updateThemeBtn();
+    }
+};
+
+const updateThemeBtn = () => {
+    const themeBtn = document.getElementById('catZapThemeBtn');
+    if (!themeBtn) return;
+    // Change icon and tooltip based on theme
+    if (BALLOON_THEME === 'dark') {
+        themeBtn.textContent = '\u{1F315}'; // moon
+        themeBtn.title = 'Tema escuro (clique: claro, system)';
+    } else {
+        themeBtn.textContent = '\u{1F506}'; // sun
+        themeBtn.title = 'Tema claro (clique: escuro, system)';
+    }
+};
+
 const clearAllBalloons = () => {
     for (const key in BALLOON_MAP) {
         BALLOON_MAP[key].remove();
@@ -201,9 +282,80 @@ const addIndicator = () => {
     });
     _toggleBtn.onclick = toggleBalloonMode;
     container.appendChild(_toggleBtn);
+    // History button
+    const historyBtn = document.createElement('button');
+    historyBtn.textContent = '\u{1F4DC} Hist';
+    Object.assign(historyBtn.style, {
+        background: 'rgba(0,0,0,0.6)', color: '#eee', border: '1px solid #555',
+        borderRadius: '4px', padding: '2px 6px', fontSize: '11px',
+        cursor: 'pointer', fontFamily: 'Segoe UI, sans-serif',
+        whiteSpace: 'nowrap',
+    });
+    historyBtn.title = 'Histórico de transcrições';
+    historyBtn.onclick = showHistoryPanel;
+    container.appendChild(historyBtn);
+    // Language selector
+    const langSelect = document.createElement('select');
+    langSelect.id = 'catZapLangSelect';
+    Object.assign(langSelect.style, {
+        background: 'rgba(0,0,0,0.6)', color: '#eee', border: '1px solid #555',
+        borderRadius: '4px', padding: '2px 6px', fontSize: '11px',
+        cursor: 'pointer', fontFamily: 'Segoe UI, sans-serif',
+        whiteSpace: 'nowrap',
+        marginLeft: '4px',
+    });
+    langSelect.title = 'Idioma da transcrição';
+    const langs = [
+        {code: 'pt', name: 'Português'},
+        {code: 'en', name: 'English'},
+        {code: 'es', name: 'Español'},
+        {code: 'fr', name: 'Français'},
+        {code: 'de', name: 'Deutsch'},
+        {code: 'it', name: 'Italiano'},
+    ];
+    langs.forEach(l => {
+        const option = document.createElement('option');
+        option.value = l.code;
+        option.textContent = l.name;
+        langSelect.appendChild(option);
+    });
+    // Load saved language
+    const loadLang = () => {
+        try {
+            chrome.storage.local.get('catzap_lang', (r) => {
+                if (r.catzap_lang) {
+                    langSelect.value = r.catzap_lang;
+                }
+            });
+        } catch {}
+    };
+    loadLang();
+    langSelect.onchange = () => {
+        const selected = langSelect.value;
+        try {
+            chrome.storage.local.set({catzap_lang: selected});
+        } catch {}
+        log('Idioma selecionado:', selected);
+    };
+    container.appendChild(langSelect);
+    // Theme toggle button
+    const themeBtn = document.createElement('button');
+    themeBtn.id = 'catZapThemeBtn';
+    themeBtn.textContent = '\u{1F315}'; // crescent moon for dark, sun for light? We'll update text based on theme.
+    Object.assign(themeBtn.style, {
+        background: 'rgba(0,0,0,0.6)', color: '#eee', border: '1px solid #555',
+        borderRadius: '4px', padding: '2px 6px', fontSize: '11px',
+        cursor: 'pointer', fontFamily: 'Segoe UI, sans-serif',
+        whiteSpace: 'nowrap',
+        marginLeft: '4px',
+    });
+    themeBtn.title = 'Alternar tema (claro/escuro)';
+    themeBtn.onclick = toggleTheme;
+    container.appendChild(themeBtn);
     document.body.appendChild(container);
     updateToggleBtn();
     loadBalloonMode();
+    loadTheme(); // Load theme and apply
     log('Indicador adicionado');
 };
 addIndicator();
@@ -335,16 +487,27 @@ const doTranscribe = async (blobUrl, row) => {
     try {
         const bytes = await getAudioBytes(blobUrl);
         if (!bytes?.length) { log('Audio vazio'); return; }
+        // Get selected language
+        let selectedLang = 'pt';
+        try {
+            selectedLang = await new Promise((resolve) => {
+                chrome.storage.local.get('catzap_lang', (r) => {
+                    resolve(r.catzap_lang || 'pt');
+                });
+            });
+        } catch {}
         const tx = await fetch(`${SERVER}/transcribe`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream', 'X-Lang': 'pt' },
+            headers: { 'Content-Type': 'application/octet-stream', 'X-Lang': selectedLang },
             body: bytes,
             signal: AbortSignal.timeout(60000),
         });
         const data = await tx.json();
         if (data.text && !data.text.startsWith('[ERRO]')) {
             log('OK:', data.text);
-            showBalloon(row, data.text);
+            const duration = data.duration_secs || 0;
+            const textWithDuration = `${data.text} ⏱${duration.toFixed(1)}s`;
+            showBalloon(row, textWithDuration);
         } else {
             log('Erro no servidor:', data.text);
             let display = data.text || '';
@@ -377,9 +540,16 @@ const showBalloon = (row, text) => {
     el._key = key;
     const st = el.style;
     st.position = 'fixed'; st.zIndex = '99999999';
-    st.background = '#fff5f7'; st.border = '2px solid #e8a0b0';
+    // Theme-based styling
+    if (BALLOON_THEME === 'dark') {
+        st.background = '#1a1a1a'; st.border = '2px solid #ff6b9d';
+        st.color = '#f0f0f0';
+    } else {
+        st.background = '#fff5f7'; st.border = '2px solid #e8a0b0';
+        st.color = '#333';
+    }
     st.borderRadius = '12px'; st.padding = '10px 14px';
-    st.fontSize = '13px'; st.color = '#333';
+    st.fontSize = '13px';
     st.boxShadow = '0 2px 12px rgba(0,0,0,0.12)';
     st.maxWidth = '360px'; st.fontFamily = 'Segoe UI, sans-serif';
     st.whiteSpace = 'pre-wrap'; st.wordBreak = 'break-word';
@@ -389,7 +559,8 @@ const showBalloon = (row, text) => {
     const closeBtn = document.createElement('span');
     closeBtn.textContent = ' \u2715';
     Object.assign(closeBtn.style, {
-        cursor: 'pointer', fontSize: '12px', color: '#c08090',
+        cursor: 'pointer', fontSize: '12px', 
+        color: BALLOON_THEME === 'dark' ? '#ff6b9d' : '#c08090',
         marginLeft: '6px', pointerEvents: 'auto',
     });
     closeBtn.onclick = () => { el.remove(); delete BALLOON_MAP[el._key]; };
@@ -403,19 +574,37 @@ const showBalloon = (row, text) => {
 const positionBalloon = (el, row) => {
     if (!el) return;
     if (!row || !document.body.contains(row)) {
-        el.style.top = `${Math.max(4, window.innerHeight - (el.offsetHeight || 80) - 20)}px`;
+        // Center bottom fallback - better positioning
+        el.style.top = `${Math.max(4, window.innerHeight - (el.offsetHeight || 80) - 80)}px`;
         el.style.left = `${Math.max(4, (window.innerWidth - (el.offsetWidth || 360)) / 2)}px`;
         return;
     }
     const rect = row.getBoundingClientRect();
-    if (rect.width === 0) return;
+    if (rect.width === 0 || rect.height === 0) {
+        // Row has no size, use center
+        el.style.top = `${Math.max(4, (window.innerHeight - (el.offsetHeight || 80)) / 2)}px`;
+        el.style.left = `${Math.max(4, (window.innerWidth - (el.offsetWidth || 360)) / 2)}px`;
+        return;
+    }
     const bH = el.offsetHeight || 60;
+    const bW = el.offsetWidth || 360;
+    // Try to position above first, if doesn't fit, position below
     let top = rect.top - bH - 6;
-    if (top < 4) top = rect.bottom + 6;
     let left = rect.left;
-    if (left + el.offsetWidth > window.innerWidth - 10)
-        left = window.innerWidth - el.offsetWidth - 10;
+    if (top < 4) {
+        // Position below instead
+        top = rect.bottom + 6;
+    }
+    // Adjust horizontal position if balloon extends past viewport
+    if (left + bW > window.innerWidth - 10) {
+        left = Math.max(4, window.innerWidth - bW - 10);
+    }
     if (left < 4) left = 4;
+    // Adjust vertical if still off screen
+    if (top + bH > window.innerHeight - 10) {
+        top = window.innerHeight - bH - 10;
+    }
+    if (top < 4) top = 4;
     el.style.top = `${top}px`;
     el.style.left = `${left}px`;
 };
@@ -463,14 +652,47 @@ window.addEventListener('message', (e) => {
                 return;
             }
         }
-        // Final fallback: use last row from data-icon mutation observer
+        // Fallback 3: Find row by closest audio element (when audio is in DOM but row not matched)
+        const audioEl = document.querySelector(`audio[src*="${prefix}"]`);
+        if (audioEl) {
+            let parent = audioEl.parentElement;
+            while (parent && parent !== document.body) {
+                const testid = parent.getAttribute && parent.getAttribute('data-testid');
+                if (testid === 'msg-container' || testid === 'conv-msg' || (parent.matches && parent.matches(ROW_SELECTOR))) {
+                    log('Fallback: found row via audio parent');
+                    cacheRow(parent);
+                    doTranscribe(url, parent);
+                    return;
+                }
+                parent = parent.parentElement;
+            }
+            // Try to find msg-container ancestor even if audio parent match fails
+            if (audioEl.closest) {
+                const msgContainer = audioEl.closest('[data-testid="msg-container"]');
+                if (msgContainer) {
+                    log('Fallback: found msg-container via closest');
+                    cacheRow(msgContainer);
+                    doTranscribe(url, msgContainer);
+                    return;
+                }
+            }
+        }
+        // Fallback 4: use last row from data-icon mutation observer
         if (_lastAudioPlayRow && document.body.contains(_lastAudioPlayRow)) {
             log('Fallback: usando row cacheada do MO');
             doTranscribe(url, _lastAudioPlayRow);
             _lastAudioPlayRow = null;
             return;
         }
-        log('Fallback: sem row disponivel');
+        // Fallback 5: broadcast to all audio rows (last resort - play sound in each)
+        log('Fallback: broadcast transcribe attempt');
+        for (const row of rows) {
+            if (isAudio(row)) {
+                log('Fallback: trying audio row');
+                doTranscribe(url, row);
+                break; // Only try first audio row found
+            }
+        }
     }
 });
 
@@ -553,7 +775,7 @@ new MutationObserver((mutations) => {
             if (blobUrls) {
                 for (const bu of blobUrls) {
                     if (KNOWN_AUDIO.has(bu)) {
-                        const row = t.closest(ROW_SELECTOR) || t;
+                        const row = t.closest('[data-testid="msg-container"]') || t.closest(ROW_SELECTOR) || t;
                         log('MO attr:', m.attributeName, '=' + val.slice(0, 50));
                         doTranscribe(bu, row);
                     }
@@ -564,7 +786,7 @@ new MutationObserver((mutations) => {
         const icon = m.attributeName === 'data-icon' ? val : '';
         const testid = m.attributeName === 'data-testid' ? val : '';
         if ((icon === 'audio-play' || icon === 'audio-pause' || testid === 'audio-play' || testid === 'audio-pause')) {
-            const row = t.closest(ROW_SELECTOR);
+            const row = t.closest('[data-testid="msg-container"]') || t.closest(ROW_SELECTOR);
             if (!row) { log('MO: row not found for', m.attributeName, val); return; }
             cacheRow(row);
             if (!scanRowForKnownBlob(row)) {
@@ -585,7 +807,7 @@ new MutationObserver((mutations) => {
             const src = audio.currentSrc || audio.src || '';
             if (!src.startsWith('blob:')) continue;
             if (!KNOWN_AUDIO.has(src)) continue;
-            const row = audio.closest(ROW_SELECTOR);
+            const row = audio.closest('[data-testid="msg-container"]') || audio.closest(ROW_SELECTOR);
             if (!row) continue;
             log('MO: audio element added');
             doTranscribe(src, row);
@@ -593,8 +815,17 @@ new MutationObserver((mutations) => {
     }
 }).observe(document.documentElement, { childList: true, subtree: true });
 
-// --- periodic scan ---
-setInterval(scanRows, 2000);
+// --- periodic scan (debounced) ---
+let _scanScheduled = false;
+const debouncedScan = () => {
+    if (_scanScheduled) return;
+    _scanScheduled = true;
+    setTimeout(() => {
+        scanRows();
+        _scanScheduled = false;
+    }, 1000);
+};
+setInterval(debouncedScan, 3000);
 
 // --- scroll reposition ---
 document.addEventListener('scroll', () => {
@@ -618,6 +849,75 @@ const clearBalloonsOnNav = () => {
 };
 
 setInterval(clearBalloonsOnNav, 800);
-// Also detect URL changes (hash or pushState)
-window.addEventListener('hashchange', clearBalloonsOnNav);
-window.addEventListener('popstate', clearBalloonsOnNav);
+ // Also detect URL changes (hash or pushState)
+ window.addEventListener('hashchange', clearBalloonsOnNav);
+ window.addEventListener('popstate', clearBalloonsOnNav);
+
+// --- history panel ---
+const createHistoryPanel = () => {
+    if (document.getElementById('catZapHistory')) return;
+    const el = document.createElement('div');
+    el.id = 'catZapHistory';
+    el.style.cssText = 'display:none;position:fixed;bottom:40px;left:12px;width:480px;max-height:500px;background:rgba(0,0,0,0.85);border:1px solid #555;border-radius:8px;z-index:999999999;font-family:Consolas,monospace;font-size:11px;color:#eee;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5)';
+    el.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:#333;border-bottom:1px solid #555;font-size:12px;user-select:none"><span>\u{1F4DC} Histórico</span><div><button class="hd-export" style="background:#555;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">\u{1F4E4} Exportar</button><button class="hd-copy" style="background:#555;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">\u{1F4CB} Copiar</button><button class="hd-clear" style="background:#555;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">\u{1F5D1}</button><button class="hd-close" style="background:#555;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px">\u2715</button></div></div><div class="hd-body" style="padding:4px 8px;overflow-y:auto;height:calc(100% - 30px);white-space:pre-wrap;word-break:break-all"></div>';
+    el.querySelector('.hd-export').onclick = () => {
+        const body = el.querySelector('.hd-body');
+        if (!body || !body.textContent) return;
+        const blob = new Blob([body.textContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `catzap_historico_${new Date().toISOString().slice(0,10)}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+        log('Histórico exportado');
+    };
+    el.querySelector('.hd-copy').onclick = () => {
+        const body = el.querySelector('.hd-body');
+        if (body) navigator.clipboard.writeText(body.textContent || '').catch(() => {});
+    };
+    el.querySelector('.hd-clear').onclick = () => {
+        fetch(`${SERVER}/history`, { method: 'DELETE', signal: AbortSignal.timeout(5000) })
+            .then(() => {
+                const body = el.querySelector('.hd-body');
+                if (body) body.innerHTML = '<i>Histórico limpo.</i>';
+            })
+            .catch(() => {
+                log('Erro ao limpar histórico no servidor');
+            });
+    };
+    el.querySelector('.hd-close').onclick = () => {
+        el.style.display = 'none';
+    };
+    document.body.appendChild(el);
+};
+
+const showHistoryPanel = async () => {
+    createHistoryPanel();
+    const el = document.getElementById('catZapHistory');
+    if (!el) return;
+    el.style.display = 'block';
+    const body = el.querySelector('.hd-body');
+    if (!body) return;
+    body.innerHTML = '<i>Carregando...</i>';
+    try {
+        const r = await fetch(`${SERVER}/history`, { signal: AbortSignal.timeout(5000) });
+        const data = await r.json();
+        const history = data.history || [];
+        if (history.length === 0) {
+            body.innerHTML = '<i>Nenhuma transcrição ainda.</i>';
+            return;
+        }
+        const lines = history.map(item => {
+            const time = new Date(item.timestamp).toLocaleTimeString();
+            const duration = item.duration_secs ? `⏱${parseFloat(item.duration_secs).toFixed(1)}s` : '';
+            return `[${time}] ${duration} ${item.text}`;
+        });
+        body.innerHTML = lines.join('\n');
+        body.scrollTop = body.scrollHeight;
+    } catch (e) {
+        body.innerHTML = `<i>Erro ao buscar histórico: ${e.message}</i>`;
+        log('Erro ao buscar histórico:', e);
+    }
+};
+

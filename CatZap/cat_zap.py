@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-CatZap v1.0 — Servidor de transcricao para extensao Chrome/Edge.
+CatZap v1.3 — Servidor de transcricao para extensao Chrome/Edge.
 Executa em segundo plano (bandeja do sistema) e ouve em localhost:51777.
 """
 
 import atexit
-import io
 import json
 import os
 import re
@@ -21,7 +20,12 @@ import webbrowser
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
-HAS_FASTER = False
+try:
+    from faster_whisper import WhisperModel
+    HAS_FASTER = True
+except ImportError:
+    HAS_FASTER = False
+
 HAS_SPELL = False
 model = None
 model_lock = threading.Lock()
@@ -31,19 +35,66 @@ _SPELL_PT = None
 _TEMP_FILES = []
 _TEMP_LOCK = threading.Lock()
 _MAX_PAYLOAD = 50 * 1024 * 1024
+_splash_root = None
+_splash_label = None
+_splash_progress = None
 
-try:
-    from faster_whisper import WhisperModel
-    HAS_FASTER = True
-except ImportError:
-    HAS_FASTER = False
+# --- splash screen ---
+def _create_splash():
+    global _splash_root, _splash_label, _splash_progress
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        _splash_root = tk.Tk()
+        _splash_root.title("CatZap")
+        _splash_root.geometry("380x120")
+        _splash_root.resizable(False, False)
+        _splash_root.overrideredirect(True)
+        _splash_root.configure(bg="#f0f0f0")
+        _splash_root.wm_attributes("-topmost", True)
+        # Center window
+        x = (_splash_root.winfo_screenwidth() - 380) // 2
+        y = (_splash_root.winfo_screenheight() - 120) // 2
+        _splash_root.geometry(f"+{x}+{y}")
+        # Icon
+        try:
+            _splash_root.iconbitmap(str(_BUNDLE_DIR / "cat_icon.ico"))
+        except:
+            pass
+        # Content
+        label = tk.Label(_splash_root, text="CatZap v1.3", font=("Segoe UI", 14, "bold"), bg="#f0f0f0")
+        label.pack(pady=(15, 5))
+        _splash_label = tk.Label(_splash_root, text="Iniciando servidor...", font=("Segoe UI", 10), bg="#f0f0f0")
+        _splash_label.pack(pady=5)
+        _splash_progress = ttk.Progressbar(_splash_root, mode="indeterminate")
+        _splash_progress.pack(fill="x", padx=30, pady=10)
+        _splash_progress.start(10)
+    except Exception as e:
+        print(f"[CatZap] Erro ao criar splash: {e}")
 
-try:
-    from spellchecker import SpellChecker
-    _SPELL_PT = SpellChecker(language='pt')
-    HAS_SPELL = True
-except Exception:
-    HAS_SPELL = False
+def _update_splash(text):
+    global _splash_label, _splash_root
+    if _splash_label and _splash_root:
+        try:
+            _splash_root.after(0, lambda: _splash_label.config(text=text))
+        except:
+            pass
+
+def _close_splash():
+    global _splash_root
+    if _splash_root:
+        try:
+            _splash_root.after(0, _splash_root.quit)
+        except:
+            pass
+
+def _splash_mainloop():
+    global _splash_root
+    if _splash_root:
+        try:
+            _splash_root.mainloop()
+        except:
+            pass
 
 # --- diretorios ---
 if getattr(sys, 'frozen', False):
@@ -57,6 +108,7 @@ _APP_DATA = Path(os.environ['APPDATA']) / 'CatZap'
 _EXT_SRC = _BUNDLE_DIR / 'cat_zap_extension'
 _EXT_DST = _APP_DATA / 'extension'
 _MODELS_DIR = _APP_DATA / 'models'
+_BUNDLE_MODELS = _BUNDLE_DIR / 'models' / 'whisper'
 _SETUP_MARKER = _APP_DATA / '.installed'
 
 os.environ.setdefault('WHISPER_CACHE_DIR', str(_MODELS_DIR / 'whisper'))
@@ -163,8 +215,16 @@ def _get_model():
                 for mod_name in models_to_try:
                     try:
                         _MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                        # Check if model is bundled
+                        download_dir = str(_MODELS_DIR / 'whisper')
+                        if getattr(sys, 'frozen', False) and _BUNDLE_MODELS.exists():
+                            download_dir = str(_BUNDLE_MODELS)
+                            _update_splash(f"Carregando modelo '{mod_name}' embutido...")
+                        else:
+                            _update_splash(f"Baixando modelo '{mod_name}' (pode levar alguns minutos)...")
                         model = WhisperModel(mod_name, device="cpu", compute_type="int8",
-                                             download_root=str(_MODELS_DIR / 'whisper'))
+                                         download_root=download_dir)
+                        _update_splash(f"Modelo '{mod_name}' carregado!")
                         print(f"[CatZap Server] Modelo '{mod_name}' carregado com sucesso")
                         break
                     except Exception as e:
@@ -188,9 +248,9 @@ def _compute_hash(audio_bytes):
 def _do_transcribe(audio_bytes, lang):
     m = _get_model()
     if m is None:
-        return "[ERRO] Modelo nao carregado"
+        return "[ERRO] Modelo nao carregado", 0
     if len(audio_bytes) < 100:
-        return "[ERRO] Audio muito curto"
+        return "[ERRO] Audio muito curto", 0
     print(f"[CatZap Server] Audio: {len(audio_bytes)} bytes")
 
     audio_hash = _compute_hash(audio_bytes)
@@ -212,7 +272,7 @@ def _do_transcribe(audio_bytes, lang):
             text = _post_process(text)
             dur = float(info.duration) if hasattr(info, 'duration') and info.duration else 0
             _save_transcription(text, dur, audio_hash)
-            return text
+            return text, dur
         except Exception as e:
             print(f"[CatZap Server] Falha com extensao '{ext}': {e}")
             if tmp and tmp.exists():
@@ -225,14 +285,14 @@ def _do_transcribe(audio_bytes, lang):
                         _TEMP_FILES.remove(tmp)
             tmp = None
             continue
-    return "[ERRO] Nao foi possivel decodificar o audio com nenhum formato"
+    return "[ERRO] Nao foi possivel decodificar o audio com nenhum formato", 0
 
 # --- servidor HTTP ---
 class CatZapHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._send_json({
-                "status": "ok", "version": "CatZap v1.0",
+                "status": "ok", "version": "CatZap v1.3",
                 "model_loaded": model is not None,
                 "model_ready": model_ready.is_set(),
                 "faster_whisper": HAS_FASTER,
@@ -250,11 +310,22 @@ class CatZapHandler(BaseHTTPRequestHandler):
             })
         elif self.path == "/":
             self._send_html(f"""<html><body style="font-family:sans-serif;text-align:center;padding:40px">
-            <h1>\U0001f431 CatZap v1.0</h1>
+            <h1>\U0001f431 CatZap v1.3</h1>
             <p>Servidor de transcricao rodando!</p>
             <p><a href="/health">health check</a></p>
             </body></html>
             """)
+        elif self.path == "/history":
+            conn = _init_db()
+            rows = conn.execute(
+                "SELECT text, duration, time, audio_hash FROM transcricoes ORDER BY id DESC LIMIT 100"
+            ).fetchall()
+            conn.close()
+            history = [
+                {"text": r[0], "duration_secs": r[1] or 0, "timestamp": r[2], "audio_hash": r[3]}
+                for r in rows
+            ]
+            self._send_json({"history": history})
         else:
             self.send_response(404)
             self.end_headers()
@@ -283,15 +354,26 @@ class CatZapHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Sem dados de audio"})
             return
         t0 = time.time()
-        text = _do_transcribe(raw, lang)
+        text, dur = _do_transcribe(raw, lang)
         dt = time.time() - t0
         print(f"[CatZap Server] Transcrito em {dt:.1f}s: {text[:80]}")
-        self._send_json({"text": text})
+        self._send_json({"text": text, "duration_secs": dur})
+
+    def do_DELETE(self):
+        if self.path == "/history":
+            conn = _init_db()
+            conn.execute("DELETE FROM transcricoes")
+            conn.commit()
+            conn.close()
+            self._send_json({"ok": True})
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Lang, X-Log")
         self.end_headers()
 
@@ -335,7 +417,7 @@ def _start_tray():
         def on_quit():
             _cleanup_temp()
             os._exit(0)
-        icon = pystray.Icon("CatZap", icon_img, f"CatZap v1.0 :{PORT}", menu=pystray.Menu(
+        icon = pystray.Icon("CatZap", icon_img, f"CatZap v1.3 :{PORT}", menu=pystray.Menu(
             pystray.MenuItem("Abrir health check", lambda: webbrowser.open(f"http://127.0.0.1:{PORT}/health")),
             pystray.MenuItem("Abrir pasta da extensao", lambda: os.startfile(str(_EXT_DST))),
             pystray.MenuItem("Sair", on_quit),
@@ -447,7 +529,9 @@ def main():
     if '--uninstall' in sys.argv[1:]:
         _do_uninstall()
 
-    _hide_console()
+    _create_splash()
+    threading.Thread(target=_splash_mainloop, daemon=True).start()
+    _update_splash("Configurando...")
 
     _setup_first_run()
 
@@ -460,20 +544,34 @@ def main():
         except OSError:
             port += 1
     if server is None:
+        _close_splash()
         sys.exit(1)
 
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    _update_splash("Servidor iniciado. Carregando modelo...")
 
     if HAS_FASTER:
         def _load_and_notify():
             _get_model()
             if model is None:
+                _close_splash()
                 _show_model_error()
+            else:
+                _update_splash("Modelo carregado! Pronto para uso.")
         threading.Thread(target=_load_and_notify, daemon=True).start()
+        # Wait for model to load (up to 5 min for first time download)
+        for _ in range(300):
+            if model_ready.is_set():
+                break
+            time.sleep(1)
+        time.sleep(2)  # Show "Pronto" message briefly
     else:
+        _update_splash("Servidor rodando!")
         model_ready.set()
+        time.sleep(1)
 
+    _close_splash()
     _start_tray()
 
-if __name__ == "__main__":
+if __name__ == "__main__" or getattr(sys, 'frozen', False):
     main()

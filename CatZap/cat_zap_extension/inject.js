@@ -86,7 +86,7 @@
     // Click tracking — capture the row at the moment of click
     let _lastClickedRow = null;
     document.addEventListener('click', (e) => {
-        _lastClickedRow = e.target.closest('.message-in,.message-out,[data-id]');
+        _lastClickedRow = e.target.closest('[data-testid="msg-container"],[data-testid="conv-msg"],[data-id]');
     }, true);
 
     // Detect audio.play() — use click tracking first, then scan DOM
@@ -96,8 +96,23 @@
         if (src.startsWith('blob:')) {
             let foundId = _lastClickedRow ? (_lastClickedRow.getAttribute('data-id') || '') : '';
             if (!foundId) {
+                // Try to find data-id in ancestors
+                if (_lastClickedRow) {
+                    let p = _lastClickedRow.parentElement;
+                    while (p && p !== document.body && !foundId) {
+                        const attrId = p.getAttribute('data-id');
+                        if (attrId) foundId = attrId;
+                        else if (p.getAttribute('data-testid') === 'conv-msg') {
+                            const convId = p.getAttribute('data-id');
+                            if (convId) foundId = convId;
+                        }
+                        p = p.parentElement;
+                    }
+                }
+            }
+            if (!foundId) {
                 try {
-                    const allRows = document.querySelectorAll('.message-in,.message-out,[data-id]');
+                    const allRows = document.querySelectorAll('[data-testid="msg-container"],[data-testid="conv-msg"],[data-id]');
                     const prefix = src.slice(0, 50);
                     for (const row of allRows) {
                         if (row.innerHTML.includes(prefix)) {
