@@ -27,6 +27,13 @@ except ImportError:
     HAS_FASTER = False
 
 HAS_SPELL = False
+_SPELL_PT = None
+try:
+    from spellchecker import SpellChecker
+    _SPELL_PT = SpellChecker(language='pt')
+    HAS_SPELL = True
+except Exception:
+    HAS_SPELL = False
 model = None
 model_lock = threading.Lock()
 model_ready = threading.Event()
@@ -429,7 +436,7 @@ def _start_tray():
             pystray.MenuItem("Abrir pasta da extensao", lambda: os.startfile(str(_EXT_DST))),
             pystray.MenuItem("Sair", on_quit),
         ))
-        icon.run()
+        icon.run(setup=None)
     except ImportError as e:
         print(f"[CatZap] pystray ImportError: {e}")
         try:
@@ -438,8 +445,21 @@ def _start_tray():
             _cleanup_temp()
             os._exit(0)
     except Exception as e:
-        traceback.print_exc()
+        log_path = str(_APP_DATA / 'erro_tray.log')
+        try:
+            _APP_DATA.mkdir(parents=True, exist_ok=True)
+            with open(log_path, 'w', encoding='utf-8') as f:
+                import traceback
+                f.write(f"[CatZap] Tray error: {e}\n\n")
+                f.write(traceback.format_exc())
+        except:
+            pass
         print(f"[CatZap] pystray error: {e}")
+        traceback.print_exc()
+        try:
+            ctypes.windll.user32.MessageBoxW(0, f"Erro no tray icon: {e}", "CatZap", 0x10)
+        except:
+            pass
         try:
             while True: time.sleep(3600)
         except KeyboardInterrupt:
