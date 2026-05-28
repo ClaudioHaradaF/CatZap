@@ -36,12 +36,11 @@ Consulte o documento detalhado de arquitetura em [CatZap/anchored_summary.md](Ca
 
 ## 🚀 Instalação
 
-### Opção 1: Instalador Recomendado
-1. Baixe CatZap_Setup.exe da [seção de releases](#-releases)
-2. Execute o instalador e siga o assistente (Next → Next → Finish)
-3. Um atalho "CatZap - WhatsApp" será criado na área de trabalho
-4. Clique no atalho para abrir o WhatsApp Web com a extensão carregada
-5. Pronto! Áudios serão transcritos automaticamente
+### Opção 1: Distribuição com Modelo Embutido (Recomendado)
+1. Baixe `CatZap_v1.3_ModeloEmbutido.zip` da [seção de releases](#-releases)
+2. Extraia o ZIP para uma pasta (ex: `C:\Program Files\CatZap`)
+3. Execute `INICIAR_CATZAP.bat` - o modelo já está embutido, não precisa internet
+4. Pronto! A extensão será carregada automaticamente
 
 ### Opção 2: Instalação Manual (Desenvolvedores)
 1. Clone o repositório:

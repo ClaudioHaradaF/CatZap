@@ -483,10 +483,11 @@ const doTranscribe = async (blobUrl, row) => {
 
     SEEN.add(key);
 
-    log('Transcrevendo:', key);
+    log('Transcrevendo:', key, 'tamanho:', '(aguardando)');
     try {
         const bytes = await getAudioBytes(blobUrl);
-        if (!bytes?.length) { log('Audio vazio'); return; }
+        if (!bytes?.length) { log('Audio vazio - blob nao disponivel'); return; }
+        log('Audio obtido:', bytes.length, 'bytes');
         // Get selected language
         let selectedLang = 'pt';
         try {
@@ -496,29 +497,47 @@ const doTranscribe = async (blobUrl, row) => {
                 });
             });
         } catch {}
-        const tx = await fetch(`${SERVER}/transcribe`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream', 'X-Lang': selectedLang },
-            body: bytes,
-            signal: AbortSignal.timeout(60000),
-        });
-        const data = await tx.json();
-        if (data.text && !data.text.startsWith('[ERRO]')) {
-            log('OK:', data.text);
-            const duration = data.duration_secs || 0;
-            const textWithDuration = `${data.text} ⏱${duration.toFixed(1)}s`;
-            showBalloon(row, textWithDuration);
-        } else {
-            log('Erro no servidor:', data.text);
-            let display = data.text || '';
-            if (display.includes('Modelo nao carregado')) display = '\u{1F63F} Modelo Whisper nao carregou. Verifique o servidor.';
-            showBalloon(row, display);
+        // Retry up to 2 times
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) {
+                log('Tentativa', attempt + 1, 'apos', attempt * 2, 's');
+                await new Promise(r => setTimeout(r, attempt * 2000));
+            }
+            try {
+                const blob = new Blob([bytes], { type: 'audio/ogg' });
+                const tx = await fetch(`${SERVER}/transcribe?lang=${selectedLang}`, {
+                    method: 'POST',
+                    body: blob,
+                    signal: AbortSignal.timeout(90000),
+                });
+                const data = await tx.json();
+                if (data.text && !data.text.startsWith('[ERRO]')) {
+                    log('OK:', data.text);
+                    const duration = data.duration_secs || 0;
+                    const textWithDuration = `${data.text} ⏱${duration.toFixed(1)}s`;
+                    showBalloon(row, textWithDuration);
+                    return;
+                }
+                log('Erro no servidor:', data.text);
+                let display = data.text || '';
+                if (display.includes('Modelo nao carregado')) display = '\u{1F63F} Modelo Whisper nao carregou. Verifique o servidor.';
+                showBalloon(row, display);
+                return;
+            } catch (e) {
+                lastError = e;
+                log('Tentativa', attempt + 1, 'falhou:', e.name, e.message);
+            }
         }
+        // All attempts failed
+        log('Excecao apos 3 tentativas:', lastError.name, lastError.message);
+        let msg = `\u{1F63F} ${lastError.message || ''}`;
+        if (lastError.name === 'TimeoutError') msg = '\u23F3 Transcricao demorou demais';
+        else if ((lastError.message || '').includes('Failed to fetch')) msg = '\u{1F63F} Servidor CatZap offline?';
+        showBalloon(row, msg);
     } catch (e) {
-        log('Excecao:', e.name, e.message);
+        log('Excecao geral:', e.name, e.message);
         let msg = `\u{1F63F} ${e.message || ''}`;
-        if (e.name === 'TimeoutError') msg = '\u23F3 Transcricao demorou demais';
-        else if ((e.message || '').includes('Failed to fetch')) msg = '\u{1F63F} Servidor CatZap offline?';
         showBalloon(row, msg);
     } finally {
         PENDING_TX.delete(key);

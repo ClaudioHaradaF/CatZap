@@ -1,6 +1,6 @@
 ; CatZap v1.0 — Installer
 #define MyAppName "CatZap"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.3"
 #define MyAppPublisher "CatZap"
 
 [Setup]
@@ -22,7 +22,7 @@ DisableDirPage=no
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 SetupIconFile=cat_icon.ico
-UninstallDisplayName=CatZap v1.0
+UninstallDisplayName=CatZap v1.3
 WizardStyle=modern
 
 [Languages]

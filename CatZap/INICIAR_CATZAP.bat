@@ -1,32 +1,29 @@
 @echo off
-title CatZap Server
+title CatZap v1.3 - Servidor de Transcricao
 cd /d "%~dp0"
-
-REM Define variáveis de ambiente para modelo embutido
-set WHISPER_CACHE_DIR=%~dp0models\whisper
-set PLAYWRIGHT_BROWSERS_PATH=%USERPROFILE%\AppData\Local\ms-playwright
 
 echo ============================================
 echo   CatZap v1.3 - Servidor de Transcricao
 echo ============================================
 echo.
-echo  Iniciando servidor...
-echo.
 
-REM Verifica se o modelo existe
+REM Configura caminho do modelo
 if exist "models\whisper\model.bin" (
-    echo  Modelo embutido detectado
+    echo  Modelo embutido detectado (425MB)
+    set WHISPER_CACHE_DIR=%cd%\models\whisper
 ) else (
     echo  AVISO: Modelo nao encontrado - sera baixado (precisa internet)
 )
 
-REM Inicia o servidor
-python cat_zap.py
-if errorlevel 1 (
-    echo.
-    echo  Erro ao iniciar. Pressione qualquer tecla para sair...
-    pause >nul
-)
+echo  Iniciando servidor...
+echo.
 
-echo [INFO] Servidor encerrado (codigo: %ERRORLEVEL%).
-pause
+REM Inicia WhatsApp Web
+start "" "https://web.whatsapp.com" 2>nul
+
+REM Executa o servidor Python
+python -u cat_zap.py
+
+echo.
+echo [INFO] Pressione qualquer tecla para fechar...
+pause >nul
